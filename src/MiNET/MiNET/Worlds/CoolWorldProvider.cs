@@ -124,9 +124,24 @@ namespace MiNET.Worlds
 			return 0;
 		}
 
+		public string GetName()
+		{
+			return "Cool world";
+		}
+
 		public int SaveChunks()
 		{
 			return 0;
+		}
+
+		public bool HaveNether()
+		{
+			return false;
+		}
+
+		public bool HaveTheEnd()
+		{
+			return false;
 		}
 
 		private const int WaterLevel = 50;

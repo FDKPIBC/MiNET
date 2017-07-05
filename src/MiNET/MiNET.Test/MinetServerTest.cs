@@ -1,24 +1,205 @@
-﻿using System;
+﻿#region LICENSE
+
+// The contents of this file are subject to the Common Public Attribution
+// License Version 1.0. (the "License"); you may not use this file except in
+// compliance with the License. You may obtain a copy of the License at
+// https://github.com/NiclasOlofsson/MiNET/blob/master/LICENSE. 
+// The License is based on the Mozilla Public License Version 1.1, but Sections 14 
+// and 15 have been added to cover use of software over a computer network and 
+// provide for limited attribution for the Original Developer. In addition, Exhibit A has 
+// been modified to be consistent with Exhibit B.
+// 
+// Software distributed under the License is distributed on an "AS IS" basis,
+// WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
+// the specific language governing rights and limitations under the License.
+// 
+// The Original Code is Niclas Olofsson.
+// 
+// The Original Developer is the Initial Developer.  The Initial Developer of
+// the Original Code is Niclas Olofsson.
+// 
+// All portions of the code written by Niclas Olofsson are Copyright (c) 2014-2017 Niclas Olofsson. 
+// All Rights Reserved.
+
+#endregion
+
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
-using System.IO.Compression;
 using System.Net;
-using System.Runtime.Remoting.Metadata.W3cXsd2001;
 using System.Text;
+using System.Threading;
+using AStarNavigator;
+using AStarNavigator.Algorithms;
+using AStarNavigator.Providers;
 using fNbt;
+using MiNET.Entities;
 using MiNET.Net;
 using MiNET.Utils;
-using MiNET.Worlds;
 using NUnit.Framework;
 
 namespace MiNET
 {
-	[TestFixture]
+	[TestFixture, Ignore("")]
 	public class MinetServerTest
 	{
+		[Test, Ignore("")]
+		public void HighPrecTimerLoadTest()
+		{
+			Stopwatch sw = new Stopwatch();
+			List<HighPrecisionTimer> timers = new List<HighPrecisionTimer>();
+			for (int i = 0; i < 100; i++)
+			{
+				timers.Add(new HighPrecisionTimer(10, SendTick, false));
+			}
+
+			Console.WriteLine($"Created {timers.Count} timers, sleeping");
+
+			Thread.Sleep(10000);
+
+			Console.WriteLine($"Done with {timers.Count} timers. Disposing");
+
+			long spins = 0;
+			long sleeps = 0;
+			long misses = 0;
+			long yields = 0;
+			foreach (var timer in timers)
+			{
+				spins += timer.Spins;
+				sleeps += timer.Sleeps;
+				misses += timer.Misses;
+				yields += timer.Yields;
+				timer.Dispose();
+			}
+
+			Console.WriteLine($"End {timers.Count} timers. " +
+			                  $"\nSpins/timer={spins/timers.Count}, " +
+			                  $"\nSleeps/timer={sleeps/timers.Count}, " +
+			                  $"\nMisses/timer={misses/timers.Count}, " +
+			                  $"\nYields/timer={yields/timers.Count} ");
+		}
+
+		[Test, Ignore("")]
+		public void HighPrecTimerSignalingLoadTest()
+		{
+			List<Thread> threads = new List<Thread>();
+			for (int i = 0; i < 1000; i++)
+			{
+				threads.Add(new Thread(Runner));
+			}
+
+			threads.ForEach(t => t.Start());
+
+			var timer = new HighPrecisionTimer(TIME/2, Interrupt, false);
+		}
+
+		private const int TIME = 200;
+
+		ManualResetEvent signal = new ManualResetEvent(false);
+		public CancellationTokenSource cancel = new CancellationTokenSource();
+
+
+		int _count = 0;
+		int _interrupts = 0;
+		long _timeWaiting = 0;
+		long _errors = 0;
+
+		public void PrintResults()
+		{
+			signal.Set();
+			Thread.Sleep(4000);
+			Console.WriteLine($"Interrupted {_interrupts} times. ");
+			Console.WriteLine($"Ticked {_count} times. ");
+			Console.WriteLine($"Errors {_errors}. ");
+			Console.WriteLine($"Avg {_timeWaiting/_count} wait. ");
+		}
+
+		private void Runner()
+		{
+			Stopwatch sw = new Stopwatch();
+			int count = 0;
+			int errors = 0;
+			long timeWaiting = 0;
+			while (!cancel.IsCancellationRequested)
+			{
+				sw.Restart();
+				signal.WaitOne();
+				var elapsedMilliseconds = sw.ElapsedMilliseconds;
+				if (elapsedMilliseconds < TIME - 5) errors++;
+				if (elapsedMilliseconds > TIME + 5) errors++;
+				timeWaiting += elapsedMilliseconds;
+				count++;
+				//Console.WriteLine($"Tick. ");
+			}
+
+			Interlocked.Add(ref _count, count);
+			Interlocked.Add(ref _timeWaiting, timeWaiting);
+			Interlocked.Add(ref _errors, errors);
+		}
+
+		private void Interrupt(object obj)
+		{
+			if(signal.WaitOne(0))
+			{
+				signal.Reset();
+			}
+			else
+			{
+				_interrupts++;
+				signal.Set();
+			}
+		}
+
+
+		private void SendTick(object obj)
+		{
+		}
+
+		[Test, Ignore("")]
+		public void TestPathFinder()
+		{
+			var navigator = new TileNavigator(
+				new EmptyBlockedProvider(), // Instance of: IBockedProvider
+				new DiagonalNeighborProvider(), // Instance of: INeighborProvider
+				new PythagorasAlgorithm(), // Instance of: IDistanceAlgorithm
+				new ManhattanHeuristicAlgorithm() // Instance of: IDistanceAlgorithm
+			);
+
+			var from = new Tile(-100.5, -102.5);
+			var to = new Tile(120.5, 122.5);
+
+			navigator.Navigate(from, to);
+		}
+
+		//[Test]
+		//public void TestUuid()
+		//{
+		//	string uuidString = "4ff749d0-1344-1cea-5929-2c63def056b4";
+		//	var uuid = new UUID(new Guid(uuidString));
+		//	//var uuid = new UUID(Guid.NewGuid());
+		//	var uuidBytes = uuid.GetBytes();
+		//	var newUuid = new UUID(uuidBytes);
+		//	Assert.AreEqual(uuid.Id, newUuid.Id);
+		//	Assert.AreEqual(uuidString, newUuid.ToString());
+		//}
+
+		[Test]
+		public void TestUuid()
+		{
+			string uuidString = "a821263b-0df8-44ed-87b7-d57a23fdccfc";
+			var inputBytes = new byte[] {0xed, 0x44, 0xf8, 0x0d, 0x3b, 0x26, 0x21, 0xa8, 0xfc, 0xcc, 0xfd, 0x23, 0x7a, 0xd5, 0xb7, 0x87};
+			var uuid = new UUID(inputBytes);
+			Assert.AreEqual(uuidString, uuid.ToString());
+			Assert.AreEqual(inputBytes, uuid.GetBytes());
+
+			uuid = new UUID(uuidString);
+			Assert.AreEqual(uuidString, uuid.ToString());
+			Assert.AreEqual(inputBytes, uuid.GetBytes());
+		}
+
 		[Test]
 		public void TestBitArray()
 		{
@@ -43,7 +224,7 @@ namespace MiNET
 
 
 			//var result = VarInt.ReadUInt64(new MemoryStream(array));
-			var result = VarInt.ReadUInt64(new MemoryStream(new byte[] { 0x80, 0x80, 0x80, 0x11 }));
+			var result = VarInt.ReadUInt64(new MemoryStream(new byte[] {0x80, 0x80, 0x80, 0x11}));
 			Console.WriteLine($"{Convert.ToString((long) result, 2)}");
 
 			//Assert.AreEqual(dataValue, result);
@@ -55,7 +236,6 @@ namespace MiNET
 		[Test]
 		public void TestCustomVarInt()
 		{
-
 			{
 				var stream = new MemoryStream();
 				var bytes = GetBytes("ff ff ff ff 0f");
@@ -118,7 +298,7 @@ namespace MiNET
 			Assert.AreEqual(1, f);
 		}
 
-		[Test, Ignore]
+		[Test, Ignore("")]
 		public void ChunkLoadTest()
 		{
 			{
@@ -426,6 +606,36 @@ namespace MiNET
 				hex.AppendFormat("0x{0:x2},", b);
 			hex.Append("}");
 			return hex.ToString();
+		}
+
+		[Test, Ignore("")]
+		public void FlagToStringTest()
+		{
+			long value = new MetadataLong(8590508032).Value; // 1000000000000010001100000000000000
+
+			BitArray bits = new BitArray(BitConverter.GetBytes(value));
+
+			byte[] bytes = new byte[8];
+			bits.CopyTo(bytes, 0);
+
+			long dataValue = BitConverter.ToInt64(bytes, 0);
+
+			Assert.AreEqual(value, dataValue);
+
+			Assert.IsTrue(bits[14]);
+			Assert.IsTrue(bits[15]);
+
+			List<Entity.DataFlags> flags = new List<Entity.DataFlags>();
+			foreach (var val in Enum.GetValues(typeof (Entity.DataFlags)))
+			{
+				if (bits[(int) val]) flags.Add((Entity.DataFlags) val);
+			}
+
+			Assert.AreEqual(4, flags.Count);
+
+			StringBuilder sb = new StringBuilder();
+			sb.Append(string.Join(", ", flags));
+			Assert.AreEqual("", sb.ToString());
 		}
 	}
 }

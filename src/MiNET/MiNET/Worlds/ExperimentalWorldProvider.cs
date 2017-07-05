@@ -46,9 +46,24 @@ namespace MiNET.Worlds
 			return 0;
 		}
 
+		public string GetName()
+		{
+			return "Experimental";
+		}
+
 		public int SaveChunks()
 		{
 			return 0;
+		}
+
+		public bool HaveNether()
+		{
+			return false;
+		}
+
+		public bool HaveTheEnd()
+		{
+			return false;
 		}
 
 		private float stoneBaseHeight = 0;

@@ -103,8 +103,13 @@ namespace MiNET.Plugins
 			DebugPrintCommands();
 		}
 
+		public event ResolveEventHandler AssemblyResolve;
+
 		private Assembly MyResolveEventHandler(object sender, ResolveEventArgs args)
 		{
+			var assembly = AssemblyResolve?.Invoke(sender, args);
+
+			if (assembly != null) return assembly;
 			if (_currentPath == null) return null;
 
 			try
@@ -170,7 +175,14 @@ namespace MiNET.Plugins
 				DescriptionAttribute descriptionAttribute = Attribute.GetCustomAttribute(method, typeof (DescriptionAttribute), false) as DescriptionAttribute;
 				if (descriptionAttribute != null) commandAttribute.Description = descriptionAttribute.Description;
 
-				_pluginCommands.Add(method, commandAttribute);
+				try
+				{
+					_pluginCommands.Add(method, commandAttribute);
+				}
+				catch (ArgumentException e)
+				{
+					Log.Debug($"Command already exist {method.Name}, {method}", e);
+				}
 			}
 		}
 
@@ -192,12 +204,18 @@ namespace MiNET.Plugins
 
 				var overload = new Overload
 				{
-					Description = commandAttribute.Description,
+					Description = commandAttribute.Description??"Bullshit",
 					Method = method,
 					Input = new Input(),
 					Output = new Output()
 					{
-						FormatStrings = new[] {"{0}"},
+						FormatStrings = new[]
+						{
+							new FormatString()
+							{
+								Format = "{0}"
+							},
+						},
 						Parameters = new[]
 						{
 							new Parameter
@@ -226,7 +244,7 @@ namespace MiNET.Plugins
 							{
 								Permission = authorizeAttribute.Permission.ToString().ToLowerInvariant(),
 								Aliases = commandAttribute.Aliases,
-								Description = commandAttribute.Description,
+								Description = commandAttribute.Description??"Bullshit",
 								Overloads = new Dictionary<string, Overload>
 								{
 									{
@@ -244,7 +262,7 @@ namespace MiNET.Plugins
 				List<Parameter> inputParams = new List<Parameter>();
 				foreach (var parameter in parameters)
 				{
-					if (isFirstParam && parameter.ParameterType == typeof (Player))
+					if (isFirstParam && typeof (Player).IsAssignableFrom(parameter.ParameterType))
 					{
 						continue;
 					}
@@ -256,10 +274,17 @@ namespace MiNET.Plugins
 					param.Optional = parameter.IsOptional;
 					if (param.Type.Equals("stringenum"))
 					{
-						string typeName = parameter.ParameterType.Name;
-						typeName = typeName.Replace("Enum", "");
-						typeName = typeName.ToLowerInvariant()[0] + typeName.Substring(1);
-						param.EnumType = typeName;
+						if (parameter.ParameterType.IsEnum)
+						{
+							param.EnumValues = parameter.ParameterType.GetEnumNames().Select(s => s.ToLowerInvariant()).ToArray();
+						}
+						else
+						{
+							string typeName = parameter.ParameterType.Name;
+							typeName = typeName.Replace("Enum", "");
+							typeName = typeName.ToLowerInvariant()[0] + typeName.Substring(1);
+							param.EnumType = typeName;
+						}
 					}
 					inputParams.Add(param);
 				}
@@ -280,6 +305,9 @@ namespace MiNET.Plugins
 					List<Parameter> outputParams = new List<Parameter>();
 					foreach (PropertyInfo property in properties)
 					{
+						if (property.Name.Equals("StatusCode")) continue;
+						if (property.Name.Equals("SuccessCount")) continue;
+
 						Parameter param = new Parameter();
 						param.Name = ToCamelCase(property.Name);
 						param.Type = GetPropertyType(property);
@@ -291,7 +319,13 @@ namespace MiNET.Plugins
 
 				if (commandAttribute.OutputFormatStrings != null)
 				{
-					overload.Output.FormatStrings = commandAttribute.OutputFormatStrings;
+					overload.Output.FormatStrings = new FormatString[commandAttribute.OutputFormatStrings.Length];
+					int i = 0;
+					foreach (var formatString in commandAttribute.OutputFormatStrings)
+					{
+						overload.Output.FormatStrings[i] = new FormatString() {Format = commandAttribute.OutputFormatStrings[i]};
+						i++;
+					}
 				}
 			}
 
@@ -362,19 +396,15 @@ namespace MiNET.Plugins
 				value = "target";
 			else if (parameter.ParameterType == typeof (BlockPos))
 				value = "blockpos";
-			else if (parameter.ParameterType.BaseType == typeof (EnumBase))
-			{
+			else if (parameter.ParameterType.IsEnum)
 				value = "stringenum";
-			}
+			else if (parameter.ParameterType.BaseType == typeof (EnumBase))
+				value = "stringenum";
 			else if (typeof (IParameterSerializer).IsAssignableFrom(parameter.ParameterType))
-			{
 				// Custom serialization
 				value = "string";
-			}
 			else
-			{
 				Log.Warn("No parameter type mapping for type: " + parameter.ParameterType.ToString());
-			}
 
 			return value;
 		}
@@ -526,7 +556,7 @@ namespace MiNET.Plugins
 				{
 					foreach (ParameterInfo parameter in method.GetParameters())
 					{
-						if (parameter.ParameterType == typeof (Player)) continue;
+						if (typeof (Player).IsAssignableFrom(parameter.ParameterType)) continue;
 
 						if (HasProperty(commandInputJson, parameter.Name))
 						{
@@ -564,7 +594,7 @@ namespace MiNET.Plugins
 			var parameters = method.GetParameters();
 
 			int addLenght = 0;
-			if (parameters.Length > 0 && parameters[0].ParameterType == typeof (Player))
+			if (parameters.Length > 0 && typeof (Player).IsAssignableFrom(parameters[0].ParameterType))
 			{
 				addLenght = 1;
 			}
@@ -577,7 +607,7 @@ namespace MiNET.Plugins
 				int i = k - addLenght;
 				if (k == 0 && addLenght == 1)
 				{
-					if (parameter.ParameterType == typeof (Player))
+					if (typeof (Player).IsAssignableFrom(parameter.ParameterType))
 					{
 						objectArgs[k] = player;
 						continue;
@@ -674,6 +704,18 @@ namespace MiNET.Plugins
 					objectArgs[k] = value;
 					continue;
 				}
+				if (parameter.ParameterType.IsEnum)
+				{
+					Enum value = Enum.Parse(parameter.ParameterType, args[i], true) as Enum;
+					if (value == null)
+					{
+						Log.Error($"Could not convert to valid enum value: {args[i]}");
+						continue;
+					}
+
+					objectArgs[k] = value;
+					continue;
+				}
 
 				if (IsParams(parameter) && parameter.ParameterType == typeof (string[]))
 				{
@@ -719,7 +761,6 @@ namespace MiNET.Plugins
 				{
 					filter.OnCommandExecuted();
 				}
-
 			}
 			catch (Exception e)
 			{
@@ -737,12 +778,12 @@ namespace MiNET.Plugins
 			else if (target.Selector == "nearestPlayer" && target.Rules != null)
 			{
 				string username = target.Rules.First().Value;
-				var players = level.GetSpawnedPlayers().Where(p => p.Username == username);
+				var players = level.GetAllPlayers().Where(p => p.Username == username);
 				target.Players = players.ToArray();
 			}
 			else if (target.Selector == "allPlayers")
 			{
-				target.Players = level.GetSpawnedPlayers();
+				target.Players = level.GetAllPlayers();
 			}
 			else if (target.Selector == "allEntities")
 			{
@@ -750,7 +791,7 @@ namespace MiNET.Plugins
 			}
 			else if (target.Selector == "randomPlayer")
 			{
-				Player[] players = level.GetSpawnedPlayers();
+				Player[] players = level.GetAllPlayers();
 				target.Players = new[] {players[new Random().Next(players.Length)]};
 			}
 
@@ -813,7 +854,7 @@ namespace MiNET.Plugins
 							{
 								method.Invoke(pluginInstance, new object[] {currentPackage});
 							}
-							else if (parameters.Length == 2 && parameters[1].ParameterType == typeof (Player))
+							else if (parameters.Length == 2 && typeof (Player).IsAssignableFrom(parameters[1].ParameterType))
 							{
 								method.Invoke(pluginInstance, new object[] {currentPackage, player});
 							}
@@ -825,7 +866,7 @@ namespace MiNET.Plugins
 							{
 								returnPacket = method.Invoke(pluginInstance, new object[] {currentPackage}) as Package;
 							}
-							else if (parameters.Length == 2 && parameters[1].ParameterType == typeof (Player))
+							else if (parameters.Length == 2 && typeof (Player).IsAssignableFrom(parameters[1].ParameterType))
 							{
 								returnPacket = method.Invoke(pluginInstance, new object[] {currentPackage, player}) as Package;
 							}

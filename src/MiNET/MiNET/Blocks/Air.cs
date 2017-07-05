@@ -10,9 +10,10 @@ namespace MiNET.Blocks
 			IsSolid = false;
 			IsBuildable = false;
 			IsTransparent = true;
+			IsBlockingSkylight = false;
 		}
 
-		public override Item[] GetDrops()
+		public override Item[] GetDrops(Item tool)
 		{
 			return new Item[0];
 		}

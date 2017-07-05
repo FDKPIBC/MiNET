@@ -25,11 +25,16 @@ namespace MiNET.Plugins
 		public string[] Aliases { get; set; }
 		public string Description { get; set; }
 		public string Permission { get; set; }
+		public bool RequiresTellPerms { get; set; }
 		public bool RequiresChatPerms { get; set; }
 		public bool OutputToSpeech { get; set; }
 
 		[JsonProperty(propertyName: "requires_edu")]
 		public bool RequiresEdu { get; set; }
+
+		[JsonProperty(propertyName: "allows_indirect_exec")]
+		public bool AllowsIndirectExec { get; set; }
+
 		[JsonProperty(propertyName: "is_hidden")]
 		public bool IsHidden { get; set; }
 
@@ -58,9 +63,29 @@ namespace MiNET.Plugins
 	public class Output
 	{
 		[JsonProperty(propertyName: "format_strings")]
-		public string[] FormatStrings { get; set; }
+		public FormatString[] FormatStrings { get; set; }
 
 		public Parameter[] Parameters { get; set; }
+	}
+
+	public class FormatString
+	{
+		public string Color { get; set; }
+		public string Format { get; set; }
+
+		[JsonProperty(propertyName: "params_to_use")]
+		public string[] ParamsToUse { get; set; }
+
+		[JsonProperty(propertyName: "should_show")]
+		public FormatRule ShouldShow { get; set; }
+	}
+
+	public class FormatRule
+	{
+		[JsonProperty(propertyName: "not_empty")]
+		public string[] NotEmpty { get; set; }
+		[JsonProperty(propertyName: "is_true")]
+		public string[] IsTrue { get; set; }
 	}
 
 	public class Parser
@@ -80,6 +105,21 @@ namespace MiNET.Plugins
 		public string[] EnumValues { get; set; }
 
 		public bool Optional { get; set; }
+
+		[JsonProperty(propertyName: "target_data")]
+		public TargetData TargetData { get; set; }
+	}
+
+	public class TargetData
+	{
+		[JsonProperty(propertyName: "players_only")]
+		public bool PlayersOnly { get; set; }
+
+		[JsonProperty(propertyName: "main_target")]
+		public bool MainTarget { get; set; }
+
+		[JsonProperty(propertyName: "allow_dead_players")]
+		public bool AllowDeadPlayers { get; set; }
 	}
 
 
@@ -114,6 +154,23 @@ namespace MiNET.Plugins
 
 		public Player[] Players { get; set; }
 		public Entity[] Entities { get; set; }
+
+		public override string ToString()
+		{
+			string body = string.Empty;
+
+			if (Players != null)
+			{
+				List<string> names = new List<string>();
+				foreach (var p in Players)
+				{
+					names.Add(p.Username);
+				}
+				body = string.Join(", ", names);
+			}
+
+			return body;
+		}
 	}
 
 
@@ -123,7 +180,7 @@ namespace MiNET.Plugins
 	}
 
 	// enchantmentType
-	public class EnchantmentEnum : EnumBase
+	public class EnchantmentTypeEnum : EnumBase
 	{
 	}
 

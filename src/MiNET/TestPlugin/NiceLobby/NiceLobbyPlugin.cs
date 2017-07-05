@@ -1,4 +1,30 @@
-﻿using System;
+﻿#region LICENSE
+
+// The contents of this file are subject to the Common Public Attribution
+// License Version 1.0. (the "License"); you may not use this file except in
+// compliance with the License. You may obtain a copy of the License at
+// https://github.com/NiclasOlofsson/MiNET/blob/master/LICENSE. 
+// The License is based on the Mozilla Public License Version 1.1, but Sections 14 
+// and 15 have been added to cover use of software over a computer network and 
+// provide for limited attribution for the Original Developer. In addition, Exhibit A has 
+// been modified to be consistent with Exhibit B.
+// 
+// Software distributed under the License is distributed on an "AS IS" basis,
+// WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
+// the specific language governing rights and limitations under the License.
+// 
+// The Original Code is Niclas Olofsson.
+// 
+// The Original Developer is the Initial Developer.  The Initial Developer of
+// the Original Code is Niclas Olofsson.
+// 
+// All portions of the code written by Niclas Olofsson are Copyright (c) 2014-2017 Niclas Olofsson. 
+// All Rights Reserved.
+
+#endregion
+
+using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
@@ -21,6 +47,7 @@ using MiNET.Net;
 using MiNET.Particles;
 using MiNET.Plugins;
 using MiNET.Plugins.Attributes;
+using MiNET.Sounds;
 using MiNET.Utils;
 using MiNET.Worlds;
 using TestPlugin.Annotations;
@@ -44,11 +71,21 @@ namespace TestPlugin.NiceLobby
 			server.LevelManager.LevelCreated += (sender, args) =>
 			{
 				Level level = args.Level;
+
+				BossBar bossBar = new BossBar(level)
+				{
+					Animate = false,
+					MaxProgress = 10,
+					Progress = 10,
+					NameTag = $"{ChatColors.Gold}You are playing on a {ChatColors.Gold}MiNET{ChatColors.Gold} server"
+				};
+				bossBar.SpawnEntity();
+
 				//level.AllowBuild = false;
 				//level.AllowBreak = false;
 
-				level.BlockBreak += LevelOnBlockBreak;
-				level.BlockPlace += LevelOnBlockPlace;
+				//level.BlockBreak += LevelOnBlockBreak;
+				//level.BlockPlace += LevelOnBlockPlace;
 			};
 
 			server.PlayerFactory.PlayerCreated += (sender, args) =>
@@ -60,7 +97,110 @@ namespace TestPlugin.NiceLobby
 
 			//_popupTimer = new Timer(DoDevelopmentPopups, null, 10000, 20000);
 			//_tickTimer = new Timer(LevelTick, null, 0, 50);
+			//_tickTimer = new Timer(SkinTick, null, 0, 150);
 		}
+
+		private object _skinSynk = new object();
+
+		private int _image = 0;
+
+		private void SkinTick(object state)
+		{
+			if (!Monitor.TryEnter(_skinSynk)) return;
+
+			try
+			{
+				foreach (var player in _players.Values)
+				{
+					{
+						if (!player.Username.Equals("gurun")) continue;
+
+						if (_image >= 9) _image = 0;
+
+						_image++;
+
+						Level level = player.Level;
+						//if (level.TickTime%3 != 0) return;
+						//player.SetNameTag(player.Username + " " + level.TickTime + " testing");
+						//player.SetDisplayName(player.Username + " " + level.TickTime + " testing");
+
+						Skin skin = player.Skin;
+						var texture = skin.Texture;
+						byte[] smiley = GetTextureFromFile(@"D:\Temp\Smiley\big_smile0" + _image + ".png");
+						if (smiley.Length != 8*8*4) return;
+						int s = 0;
+						int br = 8;
+						int bc = 8;
+						for (int r = 0; r < 8; r++)
+						{
+							for (int c = 0; c < 8; c++)
+							{
+								int i = ((c + bc)*4) + ((r + br)*64*4);
+								int j = ((c)*4) + ((r)*8*4);
+
+								texture[(i) + 0] = smiley[j + 0];
+								texture[(i) + 1] = smiley[j + 1];
+								texture[(i) + 2] = smiley[j + 2];
+								texture[(i) + 3] = smiley[j + 3];
+							}
+						}
+
+						{
+							player.SpawnPosition = player.KnownPosition;
+
+							//level.DespawnFromAll(player);
+							//level.SpawnToAll(player);
+
+							var players = level.GetSpawnedPlayers();
+
+							McpePlayerList playerList = McpePlayerList.CreateObject();
+							playerList.records = new PlayerAddRecords {player};
+							level.RelayBroadcast(player, players, CreateMcpeBatch(playerList.Encode()));
+							playerList.records = null;
+							playerList.PutPool();
+
+							//player.IsInvisible = true;
+							player.HideNameTag = true;
+							//player.BroadcastSetEntityData();
+
+							player.SpawnToPlayers(players);
+
+							//Thread.Sleep(100);
+							//player.HideNameTag = false;
+							//player.IsInvisible = false;
+							//player.BroadcastSetEntityData();
+						}
+					}
+				}
+			}
+			finally
+			{
+				Monitor.Exit(_skinSynk);
+			}
+		}
+
+		public static byte[] GetTextureFromFile(string filename)
+		{
+			Bitmap bitmap = new Bitmap(filename);
+			byte[] bytes = new byte[bitmap.Height*bitmap.Width*4];
+
+			int i = 0;
+			for (int y = 0; y < bitmap.Height; y++)
+			{
+				for (int x = 0; x < bitmap.Width; x++)
+				{
+					Color color = bitmap.GetPixel(x, y);
+					bytes[i++] = color.R;
+					bytes[i++] = color.G;
+					bytes[i++] = color.B;
+					bytes[i++] = color.A;
+				}
+			}
+
+			return bytes;
+		}
+
+		private ConcurrentDictionary<string, Player> _players = new ConcurrentDictionary<string, Player>();
 
 		private void OnPlayerJoin(object o, PlayerEventArgs eventArgs)
 		{
@@ -71,23 +211,37 @@ namespace TestPlugin.NiceLobby
 			if (player == null) throw new ArgumentNullException(nameof(eventArgs.Player));
 
 
-			//int idx = 1;
-			//player.Inventory.Slots[idx++] = ItemFactory.GetItem(new ItemIronShovel().Id);
-			//player.Inventory.Slots[idx++] = ItemFactory.GetItem(new ItemIronAxe().Id);
-			//player.Inventory.Slots[idx++] = new ItemBlock(new Sand(), 0) {Count = 64};
-			//player.Inventory.Slots[idx++] = new ItemFlintAndSteel() {Count = 1};
-			//player.Inventory.Slots[idx++] = new ItemBlock(new Torch(), 0) {Count = 64};
-			//player.Inventory.Slots[idx++] = new ItemBlock(new StoneBrick(), 0) {Count = 64};
-			//player.Inventory.Slots[idx++] = new ItemDiamondSword();
-			//player.Inventory.Slots[idx++] = new ItemBread {Count = 20};
-		 //   for (short i = 0; i < 16; i++)
-		 //   {
-   //             player.Inventory.Slots[idx++] = new ItemBlock(new Glass(), i) { Count = 20 };
-   //         }
+			int idx = 4;
+			//player.Inventory.Slots[idx++] = new ItemBlock(new Block(212), 0) {Count = 64};
+			//player.Inventory.Slots[idx++] = new ItemBlock(new Block(210), 0) {Count = 64};
+			//player.Inventory.Slots[idx++] = new ItemBlock(new Block(211), 0) {Count = 64};
+			//player.Inventory.Slots[idx++] = new ItemBlock(new Block(242), 0) {Count = 64};
+			player.Inventory.Slots[idx++] = new ItemFlintAndSteel() { Count = 1 };
+			player.Inventory.Slots[idx++] = new ItemBlock(new Torch(), 0) {Count = 64};
+			player.Inventory.Slots[idx++] = new ItemStick() { Count = 1 };
+			player.Inventory.Slots[idx++] = new ItemBlock(new Stone(), 0) {Count = 64};
+			player.Inventory.Slots[idx++] = new ItemWheat() {Count = 1};
+			player.Inventory.Slots[idx++] = new ItemCarrot() {Count = 1};
+			player.Inventory.Slots[idx++] = new ItemWheatSeeds() {Count = 1};
+			player.Inventory.Slots[idx++] = new ItemBone() {Count = 64};
+			player.Inventory.Chest = new ItemElytra() {Count = 1};
 
-			//player.SendPlayerInventory();
+			player.SendPlayerInventory();
 
-			level.BroadcastMessage($"{ChatColors.Gold}[{ChatColors.Green}+{ChatColors.Gold}]{ChatFormatting.Reset} {player.Username}");
+			_players.TryAdd(player.Username, player);
+
+			ThreadPool.QueueUserWorkItem(state =>
+			{
+				Thread.Sleep(2000);
+				level.BroadcastMessage($"{ChatColors.Gold}[{ChatColors.Green}+{ChatColors.Gold}]{ChatFormatting.Reset} {player.Username}");
+				var joinSound = new AnvilUseSound(level.SpawnPoint.ToVector3());
+				joinSound.Spawn(level);
+
+				player.SendTitle(null, TitleType.Clear);
+				player.SendTitle(null, TitleType.AnimationTimes, 6, 6, 20*10);
+				player.SendTitle($"{ChatColors.White}This is gurun's MiNET test server", TitleType.SubTitle);
+				player.SendTitle($"{ChatColors.Gold}Welcome {player.Username}!", TitleType.Title);
+			});
 		}
 
 		private void OnPlayerLeave(object o, PlayerEventArgs eventArgs)
@@ -98,7 +252,12 @@ namespace TestPlugin.NiceLobby
 			Player player = eventArgs.Player;
 			if (player == null) throw new ArgumentNullException(nameof(eventArgs.Player));
 
+			Player trash;
+			_players.TryRemove(player.Username, out trash);
+
 			level.BroadcastMessage($"{ChatColors.Gold}[{ChatColors.Red}-{ChatColors.Gold}]{ChatFormatting.Reset} {player.Username}");
+			var leaveSound = new AnvilBreakSound(level.SpawnPoint.ToVector3());
+			leaveSound.Spawn(level);
 		}
 
 		private void LevelOnBlockBreak(object sender, BlockBreakEventArgs e)
@@ -139,7 +298,7 @@ namespace TestPlugin.NiceLobby
 				{
 					McpeSetTime timeDay = McpeSetTime.CreateObject();
 					timeDay.time = 0;
-					timeDay.started = true;
+					//timeDay.started = true;
 					level.RelayBroadcast(timeDay);
 
 					ThreadPool.QueueUserWorkItem(delegate(object o)
@@ -148,7 +307,7 @@ namespace TestPlugin.NiceLobby
 
 						McpeSetTime timeReset = McpeSetTime.CreateObject();
 						timeReset.time = (int) level.CurrentWorldTime;
-						timeReset.started = level.IsWorldTimeStarted;
+						//timeReset.started = level.IsWorldTimeStarted;
 						level.RelayBroadcast(timeDay);
 
 						Thread.Sleep(200);
@@ -208,9 +367,7 @@ namespace TestPlugin.NiceLobby
 
 			McpeLevelEvent mobParticles = McpeLevelEvent.CreateObject();
 			mobParticles.eventId = (short) (0x4000 | GetParticle(random.Next(0, m < 1 ? 2 : 5)));
-			mobParticles.x = point.X + vx;
-			mobParticles.y = (point.Y - 2) + yoffset + vy;
-			mobParticles.z = point.Z + vz;
+			mobParticles.position = new Vector3(point.X + vx, (point.Y - 2) + yoffset + vy, point.Z + vz);
 			level.RelayBroadcast(mobParticles);
 		}
 
@@ -272,21 +429,13 @@ namespace TestPlugin.NiceLobby
 			//player.SetEffect(new Blindness { Level = 20, Duration = 20 * 10 });
 			//player.SetAutoJump(true);
 
-			if (player.Level.LevelId.Equals("Default"))
-			{
-				player.Level.CurrentWorldTime = 6000;
-				player.Level.IsWorldTimeStarted = false;
-			}
-
-			player.SendSetTime();
-
 			return packet;
 		}
 
 		[PacketHandler, Send, UsedImplicitly]
 		public Package AddPlayerHandler(McpeAddPlayer packet, Player player)
 		{
-			if (_playerEntities.Keys.FirstOrDefault(p => p.EntityId == packet.entityId) != null)
+			if (_playerEntities.Keys.FirstOrDefault(p => p.EntityId == packet.entityIdSelf) != null)
 			{
 				return null;
 			}
@@ -339,6 +488,9 @@ namespace TestPlugin.NiceLobby
 			text = TextUtils.RemoveFormatting(text);
 			player.Level.BroadcastMessage($"{GetNameTag(player)}:{ChatColors.White} {text}", MessageType.Raw);
 
+			var leaveSound = new AnvilFallSound(player.Level.SpawnPoint.ToVector3());
+			leaveSound.Spawn(player.Level);
+
 			return null;
 		}
 
@@ -386,7 +538,7 @@ namespace TestPlugin.NiceLobby
 
 			lock (level.Players)
 			{
-				AnvilWorldProvider worldProvider = level._worldProvider as AnvilWorldProvider;
+				AnvilWorldProvider worldProvider = level.WorldProvider as AnvilWorldProvider;
 				if (worldProvider == null) return;
 
 				level.BroadcastMessage(string.Format("{0} resets the world!", player.Username), type: MessageType.Raw);
@@ -497,13 +649,6 @@ namespace TestPlugin.NiceLobby
 			}
 		}
 
-		[Command]
-		public void Spawn(Player player, int mobTypeId)
-		{
-			Mob mob = new Mob(mobTypeId, player.Level);
-			mob.SpawnEntity();
-		}
-
 		[Command(Name = "sp")]
 		public void SpawnPlayer(Player player, string name)
 		{
@@ -554,7 +699,7 @@ namespace TestPlugin.NiceLobby
 			entity.SpawnEntity();
 
 			var remove = McpeRemoveEntity.CreateObject();
-			remove.entityId = entity.EntityId;
+			remove.entityIdSelf = entity.EntityId;
 			player.SendPackage(remove);
 
 			_playerEntities[player] = entity;
@@ -570,7 +715,7 @@ namespace TestPlugin.NiceLobby
 				var entity = _playerEntities[player];
 				entity.KnownPosition = player.KnownPosition;
 				var message = McpeMoveEntity.CreateObject();
-				message.entityId = entity.EntityId;
+				message.runtimeEntityId = entity.EntityId;
 				message.position = entity.KnownPosition;
 				player.Level.RelayBroadcast(message);
 			}
@@ -623,7 +768,7 @@ namespace TestPlugin.NiceLobby
 
 
 		[Command]
-		[Authorize(Permission = UserPermission.Op)]
+		//[Authorize(Permission = UserPermission.Op)]
 		public void VideoX(Player player, int numberOfFrames, bool color)
 		{
 			Task.Run(delegate
@@ -632,8 +777,8 @@ namespace TestPlugin.NiceLobby
 				{
 					Dictionary<Tuple<int, int>, MapEntity> entities = new Dictionary<Tuple<int, int>, MapEntity>();
 
-					int width = 1;
-					int height = 1;
+					int width = 2;
+					int height = 2;
 					int frameCount = numberOfFrames;
 					//int frameOffset = 0;
 					int frameOffset = 120;
@@ -696,7 +841,7 @@ namespace TestPlugin.NiceLobby
 		}
 
 		[Command]
-		[Authorize(Permission = UserPermission.Op)]
+		//[Authorize(Permission = UserPermission.Op)]
 		public void Video2X(Player player, int numberOfFrames, bool color)
 		{
 			Task.Run(delegate
@@ -705,8 +850,8 @@ namespace TestPlugin.NiceLobby
 				{
 					Dictionary<Tuple<int, int>, List<MapEntity>> entities = new Dictionary<Tuple<int, int>, List<MapEntity>>();
 
-					int width = 3;
-					int height = 2;
+					int width = 6;
+					int height = 3;
 					int frameCount = numberOfFrames;
 					//int frameOffset = 0;
 					int frameOffset = 120;
@@ -797,13 +942,13 @@ namespace TestPlugin.NiceLobby
 		}
 
 
-		private McpeBatch CreateCachedPacket(long mapId, byte[] bitmapToBytes)
+		private McpeWrapper CreateCachedPacket(long mapId, byte[] bitmapToBytes)
 		{
 			MapInfo mapInfo = new MapInfo
 			{
 				MapId = mapId,
-				UpdateType = 6,
-				Direction = 0,
+				UpdateType = 2,
+				Scale = 0,
 				X = 0,
 				Z = 0,
 				Col = 128,
@@ -820,9 +965,9 @@ namespace TestPlugin.NiceLobby
 			return batch;
 		}
 
-		internal static McpeBatch CreateMcpeBatch(byte[] bytes)
+		internal static McpeWrapper CreateMcpeBatch(byte[] bytes)
 		{
-			McpeBatch batch = BatchUtils.CreateBatchPacket(bytes, 0, (int) bytes.Length, CompressionLevel.Optimal, true);
+			McpeWrapper batch = BatchUtils.CreateBatchPacket(bytes, 0, (int) bytes.Length, CompressionLevel.Optimal, true);
 			batch.MarkPermanent();
 			batch.Encode();
 			return batch;

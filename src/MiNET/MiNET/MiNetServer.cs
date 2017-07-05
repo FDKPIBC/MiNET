@@ -1,3 +1,28 @@
+#region LICENSE
+
+// The contents of this file are subject to the Common Public Attribution
+// License Version 1.0. (the "License"); you may not use this file except in
+// compliance with the License. You may obtain a copy of the License at
+// https://github.com/NiclasOlofsson/MiNET/blob/master/LICENSE. 
+// The License is based on the Mozilla Public License Version 1.1, but Sections 14 
+// and 15 have been added to cover use of software over a computer network and 
+// provide for limited attribution for the Original Developer. In addition, Exhibit A has 
+// been modified to be consistent with Exhibit B.
+// 
+// Software distributed under the License is distributed on an "AS IS" basis,
+// WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for
+// the specific language governing rights and limitations under the License.
+// 
+// The Original Code is Niclas Olofsson.
+// 
+// The Original Developer is the Initial Developer.  The Initial Developer of
+// the Original Code is Niclas Olofsson.
+// 
+// All portions of the code written by Niclas Olofsson are Copyright (c) 2014-2017 Niclas Olofsson. 
+// All Rights Reserved.
+
+#endregion
+
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -10,12 +35,11 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using log4net;
-using Microsoft.AspNet.Identity;
 using Microsoft.IO;
 using MiNET.Net;
 using MiNET.Plugins;
-using MiNET.Security;
 using MiNET.Utils;
+using MiNET.Worlds;
 using Newtonsoft.Json;
 
 namespace MiNET
@@ -32,10 +56,6 @@ namespace MiNET
 
 		public MotdProvider MotdProvider { get; set; }
 
-		public bool IsSecurityEnabled { get; private set; }
-		public UserManager<User> UserManager { get; set; }
-		public RoleManager<Role> RoleManager { get; set; }
-
 		public static RecyclableMemoryStreamManager MemoryStreamManager { get; set; } = new RecyclableMemoryStreamManager();
 
 		public IServerManager ServerManager { get; set; }
@@ -50,6 +70,7 @@ namespace MiNET
 		private Timer _cleanerTimer;
 
 		public int InacvitityTimeout { get; private set; }
+		public int ResendThreshold { get; private set; }
 
 		public ServerInfo ServerInfo { get; set; }
 
@@ -64,6 +85,7 @@ namespace MiNET
 		{
 			ServerRole = Config.GetProperty("ServerRole", ServerRole.Full);
 			InacvitityTimeout = Config.GetProperty("InactivityTimeout", 8500);
+			ResendThreshold = Config.GetProperty("ResendThreshold", 10);
 			ForceOrderingForAll = Config.GetProperty("ForceOrderingForAll", false);
 
 			int confMinWorkerThreads = Config.GetProperty("MinWorkerThreads", -1);
@@ -135,7 +157,7 @@ namespace MiNET
 					}
 				}
 
-				ServerManager = ServerManager ?? new DefualtServerManager(this);
+				ServerManager = ServerManager ?? new DefaultServerManager(this);
 
 				if (ServerRole == ServerRole.Full || ServerRole == ServerRole.Node)
 				{
@@ -150,12 +172,13 @@ namespace MiNET
 					GreylistManager = GreylistManager ?? new GreylistManager(this);
 					SessionManager = SessionManager ?? new SessionManager();
 					LevelManager = LevelManager ?? new LevelManager();
+					//LevelManager = LevelManager ?? new SpreadLevelManager(1);
 					PlayerFactory = PlayerFactory ?? new PlayerFactory();
 
 					PluginManager.EnablePlugins(this, LevelManager);
 
 					// Cache - remove
-					LevelManager.GetLevel(null, "Default");
+					LevelManager.GetLevel(null, Dimension.Overworld.ToString());
 				}
 
 				GreylistManager = GreylistManager ?? new GreylistManager(this);
@@ -292,8 +315,8 @@ namespace MiNET
 					}
 					else
 					{
-						Log.Error("Unexpected end of transmission?");
-						return;
+						Log.Warn("Unexpected end of transmission?");
+						continue;
 					}
 				}
 				catch (Exception e)
@@ -475,7 +498,10 @@ namespace MiNET
 					}
 					default:
 						GreylistManager.Blacklist(senderEndpoint.Address);
-						Log.ErrorFormat("Receive unexpected packet with ID: {0} (0x{0:x2}) {2} from {1}", msgId, senderEndpoint.Address, (DefaultMessageIdTypes) msgId);
+						if (Log.IsInfoEnabled)
+						{
+							Log.ErrorFormat("Receive unexpected packet with ID: {0} (0x{0:x2}) {2} from {1}", msgId, senderEndpoint.Address, (DefaultMessageIdTypes) msgId);
+						}
 						break;
 				}
 			}
@@ -491,16 +517,33 @@ namespace MiNET
 			//response.sendpingtime = msg.sendpingtime;
 			//response.sendpongtime = DateTimeOffset.UtcNow.Ticks / TimeSpan.TicksPerMillisecond;
 
-			var packet = UnconnectedPong.CreateObject();
-			packet.serverId = senderEndpoint.Address.Address + senderEndpoint.Port;
-			packet.pingId = incoming.pingId;
-			packet.serverName = MotdProvider.GetMotd(ServerInfo, senderEndpoint);
-			var data = packet.Encode();
-			packet.PutPool();
+			if (Config.GetProperty("EnableEdu", false))
+			{
+				var packet = UnconnectedPong.CreateObject();
+				packet.serverId = senderEndpoint.Address.Address + senderEndpoint.Port;
+				packet.pingId = incoming.pingId;
+				packet.serverName = MotdProvider.GetMotd(ServerInfo, senderEndpoint, true);
+				var data = packet.Encode();
+				packet.PutPool();
 
-			TraceSend(packet);
+				TraceSend(packet);
 
-			SendData(data, senderEndpoint);
+				SendData(data, senderEndpoint);
+			}
+
+			{
+				var packet = UnconnectedPong.CreateObject();
+				packet.serverId = senderEndpoint.Address.Address + senderEndpoint.Port;
+				packet.pingId = incoming.pingId;
+				packet.serverName = MotdProvider.GetMotd(ServerInfo, senderEndpoint);
+				var data = packet.Encode();
+				packet.PutPool();
+
+				TraceSend(packet);
+
+				SendData(data, senderEndpoint);
+			}
+
 			return;
 		}
 
@@ -571,7 +614,8 @@ namespace MiNET
 				{
 					State = ConnectionState.Connecting,
 					LastUpdatedTime = DateTime.UtcNow,
-					MtuSize = incoming.mtuSize
+					MtuSize = incoming.mtuSize,
+					NetworkIdentifier = incoming.clientGuid
 				};
 
 				_playerSessions.TryAdd(senderEndpoint, session);
@@ -742,7 +786,6 @@ namespace MiNET
 				{
 					using (var stream = MemoryStreamManager.GetStream())
 					{
-
 						bool isFullStatRequest = receiveBytes.Length == 15;
 						if (Log.IsInfoEnabled) Log.InfoFormat("Full request: {0}", isFullStatRequest);
 
@@ -943,6 +986,7 @@ namespace MiNET
 		private void EnqueueAck(PlayerNetworkSession session, int sequenceNumber)
 		{
 			session.PlayerAckQueue.Enqueue(sequenceNumber);
+			session.SignalTick();
 		}
 
 		public void SendPackage(PlayerNetworkSession session, Package message)
@@ -981,7 +1025,9 @@ namespace MiNET
 			datagram.Header.datagramSequenceNumber = Interlocked.Increment(ref session.DatagramSequenceNumber);
 			datagram.TransmissionCount++;
 
-			byte[] data = datagram.Encode();
+			//byte[] data = datagram.Encode();
+			byte[] data;
+			var lenght = (int) datagram.GetEncoded(out data);
 
 			datagram.Timer.Restart();
 
@@ -992,7 +1038,27 @@ namespace MiNET
 
 			lock (session.SyncRoot)
 			{
-				SendData(data, session.EndPoint);
+				SendData(data, lenght, session.EndPoint);
+			}
+		}
+
+		internal void SendData(byte[] data, int lenght, IPEndPoint targetEndPoint)
+		{
+			try
+			{
+				_listener.Send(data, lenght, targetEndPoint); // Less thread-issues it seems
+
+				Interlocked.Increment(ref ServerInfo.NumberOfPacketsOutPerSecond);
+				Interlocked.Add(ref ServerInfo.TotalPacketSizeOut, lenght);
+			}
+			catch (ObjectDisposedException e)
+			{
+				Log.Warn(e);
+			}
+			catch (Exception e)
+			{
+				Log.Warn(e);
+				//if (_listener == null || _listener.Client != null) Log.Error(string.Format("Send data lenght: {0}", data.Length), e);
 			}
 		}
 
@@ -1019,46 +1085,64 @@ namespace MiNET
 		{
 			if (!Log.IsDebugEnabled) return;
 
-			string typeName = message.GetType().Name;
-
-			string includePattern = Config.GetProperty("TracePackets.Include", ".*");
-			string excludePattern = Config.GetProperty("TracePackets.Exclude", null);
-			int verbosity = Config.GetProperty("TracePackets.Verbosity", 0);
-			verbosity = Config.GetProperty($"TracePackets.Verbosity.{typeName}", verbosity);
-
-			if (!Regex.IsMatch(typeName, includePattern))
+			try
 			{
-				return;
-			}
+				string typeName = message.GetType().Name;
 
-			if (!string.IsNullOrWhiteSpace(excludePattern) && Regex.IsMatch(typeName, excludePattern))
-			{
-				return;
-			}
+				string includePattern = Config.GetProperty("TracePackets.Include", ".*");
+				string excludePattern = Config.GetProperty("TracePackets.Exclude", null);
+				int verbosity = Config.GetProperty("TracePackets.Verbosity", 0);
+				verbosity = Config.GetProperty($"TracePackets.Verbosity.{typeName}", verbosity);
 
-			if (verbosity == 0)
-			{
-				Log.Debug($"> Receive: {message.Id} (0x{message.Id:x2}): {message.GetType().Name}");
-			}
-			else if (verbosity == 1)
-			{
-				var jsonSerializerSettings = new JsonSerializerSettings
+				if (!Regex.IsMatch(typeName, includePattern))
 				{
-					PreserveReferencesHandling = PreserveReferencesHandling.None,
-					Formatting = Formatting.Indented,
-				};
-				string result = JsonConvert.SerializeObject(message, jsonSerializerSettings);
-				Log.Debug($"> Receive: {message.Id} (0x{message.Id:x2}): {message.GetType().Name}\n{result}");
+					return;
+				}
+
+				if (!string.IsNullOrWhiteSpace(excludePattern) && Regex.IsMatch(typeName, excludePattern))
+				{
+					return;
+				}
+
+				if (verbosity == 0)
+				{
+					Log.Debug($"> Receive: {message.Id} (0x{message.Id:x2}): {message.GetType().Name}");
+				}
+				else if (verbosity == 1)
+				{
+					var jsonSerializerSettings = new JsonSerializerSettings
+					{
+						PreserveReferencesHandling = PreserveReferencesHandling.Arrays,
+
+						Formatting = Formatting.Indented,
+					};
+					jsonSerializerSettings.Converters.Add(new NbtIntConverter());
+					jsonSerializerSettings.Converters.Add(new NbtStringConverter());
+
+					string result = JsonConvert.SerializeObject(message, jsonSerializerSettings);
+					Log.Debug($"> Receive: {message.Id} (0x{message.Id:x2}): {message.GetType().Name}\n{result}");
+				}
+				else if (verbosity == 2)
+				{
+					Log.Debug($"> Receive: {message.Id} (0x{message.Id:x2}): {message.GetType().Name}\n{Package.HexDump(message.Bytes)}");
+				}
 			}
-			else if (verbosity == 2)
+			catch (Exception e)
 			{
-				Log.Debug($"> Receive: {message.Id} (0x{message.Id:x2}): {message.GetType().Name}\n{Package.HexDump(message.Bytes)}");
+				Log.Error("Error when printing trace", e);
 			}
 		}
 
 		public static void TraceSend(Package message)
 		{
 			if (!Log.IsDebugEnabled) return;
+			if (message is McpeWrapper) return;
+			if (message is UnconnectedPong) return;
+			if (message is McpeMovePlayer) return;
+			//if (message is McpeSetEntityMotion) return;
+			//if (message is McpeMoveEntity) return;
+			if (message is McpeSetEntityData) return;
+			if (message is McpeUpdateBlock) return;
 			//if (!Debugger.IsAttached) return;
 
 			Log.DebugFormat("<    Send: {0}: {1} (0x{0:x2})", message.Id, message.GetType().Name);

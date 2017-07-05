@@ -1,4 +1,5 @@
 ﻿using MiNET.Net;
+using MiNET.Worlds;
 
 namespace MiNET.Effects
 {
@@ -48,7 +49,7 @@ namespace MiNET.Effects
 		public virtual void SendAdd(Player player)
 		{
 			var message = McpeMobEffect.CreateObject();
-			message.entityId = 0;
+			message.runtimeEntityId = EntityManager.EntityIdSelf;
 			message.eventId = 1;
 			message.effectId = (int) EffectId;
 			message.duration = Duration;
@@ -62,7 +63,7 @@ namespace MiNET.Effects
 		public virtual void SendUpdate(Player player)
 		{
 			var message = McpeMobEffect.CreateObject();
-			message.entityId = 0;
+			message.runtimeEntityId = EntityManager.EntityIdSelf;
 			message.eventId = 2;
 			message.effectId = (int) EffectId;
 			message.duration = Duration;
@@ -74,7 +75,7 @@ namespace MiNET.Effects
 		public virtual void SendRemove(Player player)
 		{
 			var message = McpeMobEffect.CreateObject();
-			message.entityId = 0;
+			message.runtimeEntityId = EntityManager.EntityIdSelf;
 			message.eventId = 3;
 			message.effectId = (int) EffectId;
 			player.SendPackage(message);
@@ -83,7 +84,7 @@ namespace MiNET.Effects
 		public virtual void OnTick(Player player)
 		{
 			if (Duration > 0 && Duration != MaxDuration) Duration -= 1;
-			if(Duration < -20) player.RemoveEffect(this); // Need 20 tick grace for some effects that fade
+			if(Duration < 20) player.RemoveEffect(this); // Need 20 tick grace for some effects that fade
 		}
 
 		public override string ToString()
